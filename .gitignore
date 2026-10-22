@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# macOS
+.DS_Store
+
+# 运行时状态/日志(不入库)
+*.log
+*.pid
+state/
+actions.jsonl

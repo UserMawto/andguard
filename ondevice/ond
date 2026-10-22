@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+# andguard-ond — 管理手机端自治守护 + 网页控制台
+# 用法:
+#   ./ond start       # 推送守护+控制台到手机并启动(守护+httpd一起)
+#   ./ond stop        # 停止守护与网页
+#   ./ond restart     # 重启
+#   ./ond status      # 守护是否在运行
+#   ./ond web         # 网页控制台 状态(web start/stop/status 子命令)
+#   ./ond log         # 守护日志
+#   ./ond pushconf    # 重新推送配置
+set +e
+HERE="$(dirname "$0")"
+DEVICE="${ANDGUARD_DEVICE:-192.168.0.237:5555}"
+A=(adb -s "$DEVICE")
+SCRIPT=/data/local/tmp/andguard-ondevice.sh
+CONF=/data/local/tmp/andguard.conf
+PIDF=/data/local/tmp/andguard.pid
+BB=/data/local/tmp/busybox
+WWW=/data/local/tmp/www
+HPDIR=/data/local/tmp/httpd.pid
+
+cmd() { "${A[@]}" "$@"; }
+
+# ---------- 守护 ----------
+start() {
+  cmd push "$HERE/andguard-ondevice.sh" "$SCRIPT" >/dev/null
+  cmd shell "chmod 755 $SCRIPT"
+  if [ -f "$HERE/andguard.conf" ]; then cmd push "$HERE/andguard.conf" "$CONF" >/dev/null; fi
+  # 用 pidfile 杀旧进程(避免 pkill -f 自杀)，再 nohup 启动(脱离 adb 会话)
+  cmd shell "if [ -f $PIDF ]; then kill \$(cat $PIDF) 2>/dev/null; rm -f $PIDF; fi; sleep 1; nohup sh $SCRIPT </dev/null >/dev/null 2>&1 &"
+  web_start
+  sleep 3
+  echo "已启动手机端守护+网页控制台。状态："
+  status
+}
+
+stop() {
+  cmd shell "if [ -f $PIDF ]; then kill \$(cat $PIDF) 2>/dev/null; rm -f $PIDF; fi; pkill -f 'andguard-ondevice[.]sh' 2>/dev/null"
+  web_stop
+  echo "已停止。"
+}
+
+status() {
+  cmd shell "if [ -f $PIDF ] && kill -0 \"\$(cat $PIDF)\" 2>/dev/null; then echo \"● 守护运行中 (pid=\$(cat $PIDF))\"; else echo '(守护未运行)'; fi"
+}
+
+log()   { cmd shell "tail -n 50 /data/local/tmp/andguard.log 2>&1"; }
+pushconf(){ cmd push "$HERE/andguard.conf" "$CONF" >/dev/null && echo "配置已推送(守护重启后生效)。"; }
+
+# ---------- 网页控制台(busybox httpd) ----------
+web_start() {
+  # 推送 busybox(若设备上无)与控制台页面
+  cmd shell "[ -x $BB ] || echo need_push" | grep -q need_push && cmd push "$HERE/busybox-arm64" "$BB" >/dev/null && cmd shell "chmod 755 $BB"
+  cmd push "$HERE/www/cgi-bin/panel.cgi" "$WWW/cgi-bin/panel.cgi" >/dev/null
+  cmd shell "chmod 755 $WWW/cgi-bin/panel.cgi"
+  # 杀旧 httpd(按pid)，再启动并记录真实 httpd pid(pidof busybox)
+  cmd shell "if [ -f $HPDIR ]; then kill \$(cat $HPDIR) 2>/dev/null; rm -f $HPDIR; fi; sleep 1; nohup $BB httpd -p 8080 -h $WWW </dev/null >/dev/null 2>&1 & echo \$(pidof busybox | awk '{print \$1}') > $HPDIR"
+  sleep 2
+}
+
+web_stop() {
+  cmd shell "if [ -f $HPDIR ]; then kill \$(cat $HPDIR) 2>/dev/null; rm -f $HPDIR; fi; pkill -f 'busybox.*httpd' 2>/dev/null"
+}
+
+web_status() {
+  cmd shell "if [ -f $HPDIR ] && kill -0 \"\$(cat $HPDIR)\" 2>/dev/null; then echo \"● 网页控制台运行中\"; echo \"  手机浏览器打开: http://$(cmd shell ip route get 1.1.1.1 2>/dev/null | grep -oE 'src [0-9.]+' | head -1 | cut -d' ' -f2 | tr -d '\r'):8080/cgi-bin/panel.cgi\"; else echo '(网页控制台未运行)'; fi"
+}
+
+web() {
+  case "$2" in
+    start) web_start; echo "网页控制台已启动。"; web_status;;
+    stop)  web_stop; echo "网页控制台已停止。";;
+    status) web_status;;
+    *) web_status;;
+  esac
+}
+
+# 重启后一键恢复：尝试无线重连；连上即拉起守护+网页；连不上提示插USB
+boot() {
+  echo "尝试重连 ${DEVICE} ..."
+  adb connect "${DEVICE}" >/dev/null 2>&1
+  sleep 1
+  if adb -s "${DEVICE}" get-state >/dev/null 2>&1; then
+    echo "✓ 已连接，正在启动守护+控制台..."
+    start
+  else
+    echo "✗ 未连接到手机。手机重启后无线调试失效，需要先 USB 连接一次："
+    echo "  1) 用 USB 线把手机连到电脑，保持 开发者选项→USB调试 开启"
+    echo "  2) 若弹窗提示『允许USB调试』，勾选并确认"
+    echo "  3) 再运行一次: ./ond boot"
+    echo "  (首次授权后，下次重启插线直接跑这条命令即可)"
+  fi
+}
+
+case "$1" in
+  start) start;;
+  stop)  stop;;
+  restart) stop; sleep 1; start;;
+  boot)  boot;;
+  status) status;;
+  log)   log;;
+  pushconf) pushconf;;
+  web)   web "$@";;
+  *) echo "用法: $0 {start|stop|restart|boot|status|log|pushconf|web[start|stop|status]}";;
+esac

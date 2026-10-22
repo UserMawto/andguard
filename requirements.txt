@@ -1,0 +1,2 @@
+# andguard 依赖：仅 PyYAML（读取 ~/.andguard/config.yaml）
+PyYAML>=6.0

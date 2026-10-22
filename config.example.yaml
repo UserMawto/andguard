@@ -1,0 +1,50 @@
+# andguard 配置示例 —— 复制为 ~/.andguard/config.yaml 后生效
+# 未生成配置文件时，程序使用内置默认 + dry_run(观察期)，不会真动手。
+
+# adb 设备序列号；留空则自动选唯一在线设备。
+# 无线连接示例： 192.168.0.237:5555   （先 adb tcpip 5555 + adb connect）
+device: "192.168.0.237:5555"
+
+# dry_run = true 观察期：所有决策只记录到 actions.jsonl，不实际挂起/冻结/杀。
+# 观察确认规则合理后，改成 false 才真正治理。
+dry_run: true
+
+# daemon 采样间隔（秒）
+poll_interval: 3
+
+# 永不自动治理（核心应用）。默认保护微信/支付宝。
+exclude:
+  - com.tencent.mm
+  - com.eg.android.AlipayGphone
+
+# 挂起方式：appops(轻，后台冻结，前台打开仍可用) / freeze(pm disable，完全停用)
+suspend_method: appops
+
+rules:
+  r1_bg_freeze:      # 后台高 CPU → 挂起
+    enable: true
+    cpu_pct: 40
+    duration_sec: 30
+    cooldown_min: 10
+  r2_suspend:        # 后台整树超高 → 重度挂起(freeze)
+    enable: true
+    cpu_pct: 120
+    duration_sec: 60
+    cooldown_min: 15
+  r3_memory:         # 内存告急 → 清缓存 + 挂最大后台应用
+    warn_pct: 25
+    critical_pct: 12
+    persist_sec: 20
+  r4_notify:         # 任意进程超高 → 仅通报，绝不 kill
+    cpu_pct: 90
+    persist_min: 5
+    cooldown_min: 60
+  r5_kill:           # 失控应用 → 真正杀掉(force-stop)。默认关闭，需手动 enable
+    enable: false
+    cpu_pct: 200
+    duration_sec: 90
+    cooldown_min: 30
+
+limits:
+  background_process_limit: -1   # -1 不设；0-4 全局后台进程上限
+  trim_caches_gb: 1              # 内存告急时 pm trim-caches 保留空闲 GB
